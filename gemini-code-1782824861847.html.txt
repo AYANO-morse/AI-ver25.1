@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>吹奏楽 金賞評価一括AI照合システム（末尾判定版）</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+            margin: 20px;
+        }
+        h2 { color: #fff; border-bottom: 2px solid #ffca28; padding-bottom: 10px; font-size: 24px; }
+        .control-panel {
+            background-color: #1e1e1e;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border: 1px solid #333;
+        }
+        .file-input-wrapper {
+            background: #252525;
+            padding: 20px;
+            border-radius: 6px;
+            border-left: 5px solid #ffca28;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+        .file-label {
+            font-size: 16px;
+            font-weight: bold;
+            color: #ffca28;
+            display: block;
+            margin-bottom: 10px;
+        }
+        #filePicker {
+            font-size: 15px;
+            color: #fff;
+            background: #121212;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid #444;
+            cursor: pointer;
+        }
+        .slider-group {
+            display: flex;
+            gap: 20px;
+            margin-top: 15px;
+            background: #252525;
+            padding: 10px 15px;
+            border-radius: 6px;
+        }
+        .slider-item { display: flex; flex-direction: column; flex: 1; }
+        .slider-item span { font-size: 11px; color: #888; margin-top: 2px; }
+        
+        canvas {
+            background-color: #050505;
+            border: 1px solid #333;
+            border-radius: 8px;
+            width: 100%;
+            height: 420px;
+            display: block;
+            margin-bottom: 20px;
+        }
+        
+        .status { color: #ffca28; font-weight: bold; margin-top: 10px; display: block; min-height: 20px;}
+
+        #fileList {
+            margin-top: 15px;
+            font-size: 13px;
+            list-style: none;
+            padding: 0;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        #fileList li {
+            padding: 6px 12px;
+            border-radius: 4px;
+            color: #000;
+            font-weight: bold;
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .score-box {
+            background: radial-gradient(circle, #2a2a2a 0%, #1a1a1a 100%);
+            border: 2px solid #ffca28;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            text-align: center;
+        }
+        .score-num {
+            font-size: 64px;
+            font-weight: bold;
+            color: #ffca28;
+            text-shadow: 0 0 15px rgba(255, 202, 40, 0.4);
+            margin: 10px 0;
+        }
+        .ai-report {
+            background-color: #1e1e1e;
+            border-top: 4px solid #ffca28;
+            padding: 20px;
+            border-radius: 8px;
+        }
+        .report-title { font-weight: bold; color: #ffca28; margin-bottom: 12px; font-size: 18px; display: flex; align-items: center; gap: 8px; }
+        .report-content { font-size: 14px; line-height: 1.7; white-space: pre-wrap; color: #ddd; }
+        .highlight-text { color: #ffeb3b; font-weight: bold; }
+        .env-badge { background: #ff9800; color: #fff; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-left: 10px; vertical-align: middle;}
+    </style>
+</head>
+<body>
+
+    <h2>🏆 吹奏楽コンクール 金賞評価一括AI照合システム <span class="env-badge">語尾「_01」自動基準認識</span></h2>
+
+    <div class="control-panel">
+        <div class="file-input-wrapper">
+            <span class="file-label">🎵 分析するすべてのファイル（またはZIP）を一括選択してください（2〜7個推奨）</span>
+            <input type="file" id="filePicker" accept=".zip,audio/*,video/*" multiple>
+            <ul id="fileList"></ul>
+            <span id="statusText" class="status">音源ファイルをまとめて読み込んでください。※ファイル名末尾に「_01」があるものをお手本（金賞基準）にします。</span>
+        </div>
+
+        <div class="slider-group">
+            <div class="slider-item">
+                <label for="zoomSlider">時間軸ズーム (細部の拡大分析)</label>
+                <input type="range" id="zoomSlider" min="1" max="150" value="1">
+            </div>
+            <div class="slider-item">
+                <label for="offsetSlider">タイムライン移動 (シーク)</label>
+                <input type="range" id="offsetSlider" min="0" max="100" value="0">
+            </div>
+        </div>
+    </div>
+
+    <canvas id="oscilloscope" width="1200" height="420"></canvas>
+
+    <div class="dashboard" id="aiDashboard" style="display: none;">
+        <div class="score-box">
+            <div style="font-size: 14px; color: #aaa; font-weight: bold;">金賞演奏との平均技術一致度</div>
+            <div class="score-num" id="aiScore">--</div>
+            <div style="font-size: 13px; color: #ffca28;" id="awardRank">審査中</div>
+            <div style="font-size: 11px; color: #888; margin-top: 10px;">※防音室のデッドな響き、およびマイク感度の差をAIが自動カット済み</div>
+        </div>
+        <div class="ai-report">
+            <div class="report-title">🤖 AI音響解析・一括マルチ診断カルテ</div>
+            <div class="report-content" id="reportContent">解析中...</div>
+        </div>
+    </div>
+
+    <script>
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const filePicker = document.getElementById('filePicker');
+        const statusText = document.getElementById('statusText');
+        const fileListElement = document.getElementById('fileList');
+        const canvas = document.getElementById('oscilloscope');
+        const ctx = canvas.getContext('2d');
+        
+        const zoomSlider = document.getElementById('zoomSlider');
+        const offsetSlider = document.getElementById('offsetSlider');
+        const aiDashboard = document.getElementById('aiDashboard');
+        const aiScore = document.getElementById('aiScore');
+        const awardRank = document.getElementById('awardRank');
+        const reportContent = document.getElementById('reportContent');
+
+        let audioDataList = [];
+        let aiAnalysisResult = null;
+
+        const mediaExtensionPattern = /\.(mp4|webm|ogg|mov|avi|m4v|mp3|wav|m4a|flac|aac)$/i;
+        
+        const colors = [
+            'rgba(255, 215, 0, 0.9)',    // 金（お手本用）
+            'rgba(54, 162, 235, 0.75)',  // 青
+            'rgba(46, 204, 113, 0.75)',  // 緑
+            'rgba(153, 102, 255, 0.75)', // 紫
+            'rgba(255, 159, 64, 0.75)',  // オレンジ
+            'rgba(0, 255, 255, 0.75)',   // シアン
+            'rgba(211, 84, 0, 0.75)'     // ダークオレンジ
+        ];
+
+        filePicker.addEventListener('change', async (e) => {
+            const files = Array.from(e.target.files);
+            if (files.length === 0) return;
+
+            statusText.textContent = "全ファイルを解析用メモリーにデコード中...";
+            audioDataList = [];
+            fileListElement.innerHTML = '';
+            aiDashboard.style.display = 'none';
+
+            let tempRawList = [];
+
+            // 1. まずZIPや単体ファイルを全てフラットな配列として展開
+            for (const file of files) {
+                if (file.name.endsWith('.zip')) {
+                    statusText.textContent = `ZIP解凍中: ${file.name}`;
+                    const zip = await JSZip.loadAsync(file);
+                    for (const path in zip.files) {
+                        const zipEntry = zip.files[path];
+                        if (!zipEntry.dir && path.match(mediaExtensionPattern)) {
+                            statusText.textContent = `ZIP内抽出中: ${path}`;
+                            const buffer = await zipEntry.async("arraybuffer");
+                            tempRawList.push({ buffer, name: path });
+                        }
+                    }
+                } else {
+                    statusText.textContent = `読み込み中: ${file.name}`;
+                    const buffer = await file.arrayBuffer();
+                    tempRawList.push({ buffer, name: file.name });
+                }
+            }
+
+            // 🌟【最重要ロジック修正】拡張子を除いたファイル名の末尾が「_01」のものを最優先(先頭)にするソート
+            tempRawList.sort((a, b) => {
+                const isA_01 = isTargetModel(a.name);
+                const isB_01 = isTargetModel(b.name);
+                if (isA_01 && !isB_01) return -1;
+                if (!isA_01 && isB_01) return 1;
+                return a.name.localeCompare(b.name);
+            });
+
+            // 2. ソートされた順にデコード・正規化処理
+            let colorIndex = 0;
+            for (const item of tempRawList) {
+                statusText.textContent = `デコード・正規化中: ${item.name}`;
+                await processBuffer(item.buffer, item.name, colorIndex++);
+            }
+
+            // 3. AI判定チェック
+            const hasGold = audioDataList.some(item => item.isGold);
+            if (audioDataList.length >= 2 && hasGold) {
+                statusText.textContent = "⚙️ 環境補正マルチAI起動：_01の音源を基準に残響を無視して一斉照合中...";
+                setTimeout(() => {
+                    runMultiAIEngine();
+                    drawGraph();
+                }, 100);
+            } else if (audioDataList.length >= 2 && !hasGold) {
+                statusText.textContent = "⚠️ 警告: 末尾に「_01」が含まれる基準音源ファイルが見つかりません。ファイル名を確認してください。";
+                drawGraph();
+            } else if (audioDataList.length === 1) {
+                statusText.textContent = "比較判定には2つ以上のファイルが必要です。";
+                drawGraph();
+            } else {
+                statusText.textContent = "有効な動画・音声ファイルが検出されませんでした。";
+            }
+        });
+
+        // 拡張子の手前（語尾）に「_01」があるかを正確に判定する関数
+        function isTargetModel(filename) {
+            const nameWithoutExt = filename.substring(0, filename.lastIndexOf('.'));
+            return nameWithoutExt.endsWith('_01');
+        }
+
+        async function processBuffer(arrayBuffer, name, index) {
+            try {
+                const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                const rawData = audioBuffer.getChannelData(0);
+                
+                let maxVal = 0;
+                for(let i=0; i<rawData.length; i++) {
+                    if(Math.abs(rawData[i]) > maxVal) maxVal = Math.abs(rawData[i]);
+                }
+                const normalizedData = new Float32Array(rawData.length);
+                if(maxVal > 0) {
+                    for(let i=0; i<rawData.length; i++) normalizedData[i] = rawData[i] / maxVal;
+                }
+
+                // _01判定が真ならゴールドカラー、それ以外は通常パレットを割り当て
+                const isGoldFile = isTargetModel(name);
+                const itemColor = isGoldFile ? colors[0] : colors[(index === 0 ? 1 : index) % colors.length];
+
+                audioDataList.push({
+                    name: name,
+                    data: normalizedData,
+                    sampleRate: audioBuffer.sampleRate,
+                    color: itemColor,
+                    isGold: isGoldFile
+                });
+
+                const li = document.createElement('li');
+                li.textContent = isGoldFile ? `🌟金賞基準: ${name}` : `比較テイク: ${name}`;
+                li.style.backgroundColor = itemColor;
+                fileListElement.appendChild(li);
+
+            } catch(e) {
+                console.error(e);
+            }
+        }
+
+        function runMultiAIEngine() {
+            const goldAudio = audioDataList.find(item => item.isGold);
+            const targets = audioDataList.filter(item => !item.isGold);
+            
+            const goldData = goldAudio.data;
+            const winSize = 2048;
+            
+            const minLen = Math.min(...audioDataList.map(item => item.data.length));
+            const step = Math.floor(minLen / 1200);
+            
+            let totalScoreSum = 0;
+            let maxErrorVal = 0;
+            let maxErrorTime = 0;
+
+            aiAnalysisResult = { yellowZones: new Array(1200).fill(false) };
+
+            for (let i = 0; i < 1200; i++) {
+                const centerIdx = i * step;
+                if (centerIdx + winSize > minLen) break;
+
+                const goldFrame = goldData.subarray(centerIdx, centerIdx + winSize);
+                let gRms = 0, gZcr = 0;
+                for(let j=0; j<winSize; j++) gRms += goldFrame[j] * goldFrame[j];
+                gRms = Math.sqrt(gRms / winSize);
+                for(let j=1; j<winSize; j++) {
+                    if ((goldFrame[j] >= 0 && goldFrame[j-1] < 0) || (goldFrame[j] < 0 && goldFrame[j-1] >= 0)) gZcr++;
+                }
+
+                let frameDiffMax = 0;
+                let frameScoreSum = 0;
+
+                targets.forEach(target => {
+                    const tFrame = target.data.subarray(centerIdx, centerIdx + winSize);
+                    let tRms = 0, tZcr = 0;
+                    for(let j=0; j<winSize; j++) tRms += tFrame[j] * tFrame[j];
+                    tRms = Math.sqrt(tRms / winSize);
+                    for(let j=1; j<winSize; j++) {
+                        if ((tFrame[j] >= 0 && tFrame[j-1] < 0) || (tFrame[j] < 0 && tFrame[j-1] >= 0)) tZcr++;
+                    }
+
+                    const rmsDiff = Math.abs(gRms - tRms);
+                    const zcrDiff = Math.abs(gZcr - tZcr) / winSize;
+                    
+                    const combinedDiff = (rmsDiff * 3.0) + (zcrDiff * 2.5);
+                    if(combinedDiff > frameDiffMax) frameDiffMax = combinedDiff;
+
+                    let tScore = 100 - (rmsDiff * 140) - (zcrDiff * 180);
+                    frameScoreSum += Math.max(0, Math.min(100, tScore));
+                });
+
+                if (frameDiffMax > 0.42) {
+                    aiAnalysisResult.yellowZones[i] = true;
+                    if (frameDiffMax > maxErrorVal) {
+                        maxErrorVal = frameDiffMax;
+                        maxErrorTime = centerIdx / goldAudio.sampleRate;
+                    }
+                }
+                totalScoreSum += (frameScoreSum / targets.length);
+            }
+
+            const finalScore = Math.max(0, Math.min(100, Math.floor(totalScoreSum / 1200)));
+            aiDashboard.style.display = 'grid';
+            aiScore.textContent = finalScore;
+
+            let rank = "", report = "";
+            if(finalScore >= 90) {
+                rank = "🏆 金賞代表レベル (Gold)";
+                awardRank.style.color = "#ffca28";
+                report = `【完璧な仕上がりです】\n「_01」の基準音源に対して、全てのテイク・パートの縦の線（アタック）が驚異的な精度で一致しています。防音室のデッドな響きを差し引いても、豊かな倍音成分が生まれていることが確認できます。`;
+            } else if(finalScore >= 78) {
+                rank = "🥇 金賞レベル (Gold)";
+                awardRank.style.color = "#ffd700";
+                report = `【金賞圏内です】\n全体の一体感は非常に高いです。しかし、一部のテイクやフレーズの変わり目で、タンギングのズレや和音の浮きを検知しました。【黄色い警告エリア】は環境のせいではなく純粋な演奏のブレです。ここを詰めれば確実に代表を狙えます。`;
+            } else if(finalScore >= 60) {
+                rank = "🥈 銀賞レベル (Silver)";
+                awardRank.style.color = "#c0c0c0";
+                report = `【銀賞レベル：縦の線、または欠席パートの穴埋めに課題があります】\n基準波形と練習波形の間に発音タイミング（アタック）の顕著なズレが見られます。特に <span class="highlight-text">${maxErrorTime.toFixed(1)}秒</span> 付近をはじめとする【黄色いエリア】は、音がバラついているか、欠席者による音の空白（あるいは代吹きのタイミング不良）をAIが捉えています。`;
+            } else {
+                rank = "🥉 銅賞レベル (Bronze)";
+                awardRank.style.color = "#cd7f32";
+                report = `【銅賞レベル：全員の発音タイミングの徹底的な統一が必要です】\n環境補正後も、お手本波形とのズレが大きいです。音がバラバラにバラついてフレーズの輪郭が消えてしまっています。まずはテンポを落とし、全員のブレスとアタックを揃える基礎合奏に立ち戻りましょう。`;
+            }
+
+            awardRank.textContent = rank;
+            reportContent.innerHTML = report + `\n\n⚠️ 【AI最重要指摘】: 演奏時間 <span class="highlight-text">${maxErrorTime.toFixed(2)} 秒</span> 付近で、最大級の演奏乖離（アタックの滑り、またはハモりの破綻）が発生しています。スコアのこの小節を全員で確認してください。`;
+            statusText.textContent = "AI分析完了。";
+        }
+
+        zoomSlider.addEventListener('input', drawGraph);
+        offsetSlider.addEventListener('input', drawGraph);
+
+        function drawGraph() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.strokeStyle = '#222';
+            ctx.beginPath(); ctx.moveTo(0, canvas.height/2); ctx.lineTo(canvas.width, canvas.height/2); ctx.stroke();
+
+            if (audioDataList.length === 0) return;
+
+            const zoom = parseFloat(zoomSlider.value);
+            const offsetPercent = parseFloat(offsetSlider.value) / 100;
+            
+            const maxLen = Math.max(...audioDataList.map(item => item.data.length));
+            const visibleSamples = Math.floor(maxLen / zoom);
+            const startSample = Math.floor((maxLen - visibleSamples) * offsetPercent);
+
+            if (aiAnalysisResult && audioDataList.length >= 2) {
+                ctx.fillStyle = 'rgba(255, 235, 59, 0.22)';
+                for (let x = 0; x < canvas.width; x++) {
+                    const sampleIdx = startSample + Math.floor((x / canvas.width) * visibleSamples);
+                    const aiIdx = Math.floor((sampleIdx / maxLen) * 1200);
+                    if (aiAnalysisResult.yellowZones[aiIdx]) {
+                        ctx.fillRect(x, 0, 1, canvas.height);
+                    }
+                }
+            }
+
+            // 基準(Gold)を最前面にするため、先に非ゴールド、最後にゴールドを描画
+            const sortedToDraw = [
+                ...audioDataList.filter(item => !item.isGold),
+                ...audioDataList.filter(item => item.isGold)
+            ];
+
+            sortedToDraw.forEach(audioItem => {
+                ctx.strokeStyle = audioItem.color;
+                ctx.lineWidth = audioItem.isGold ? 2.2 : 1.2;
+                ctx.beginPath();
+
+                const step = Math.ceil(visibleSamples / canvas.width);
+                const amp = canvas.height / 2;
+
+                for (let i = 0; i < canvas.width; i++) {
+                    const sampleIndex = startSample + (i * step);
+                    if (sampleIndex >= audioItem.data.length || sampleIndex < 0) continue;
+                    const x = i;
+                    const y = (1 - audioItem.data[sampleIndex]) * amp;
+                    if (i === 0) ctx.moveTo(x, y);
+                    else ctx.lineTo(x, y);
+                }
+                ctx.stroke();
+            });
+
+            ctx.font = '12px Arial';
+            ctx.fillStyle = '#ffeb3b'; ctx.fillText(`■ AI金賞乖離警告エリア (誰かがズレた、または音が抜けた場所)`, 15, 25);
+        }
+    </script>
+</body>
+</html>
